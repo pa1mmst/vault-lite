@@ -135,25 +135,46 @@ def inline(text):
 # ── HTML template ─────────────────────────────────────────────
 BASE_STYLE = """
 :root {
-  --bg-primary: #0f0f0f;
-  --bg-secondary: #1a1a1a;
-  --bg-tertiary: #232323;
-  --bg-hover: #2a2a2a;
-  --text-primary: #ffffff;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
-  --accent: #6366f1;
-  --accent-hover: #818cf8;
-  --accent-muted: rgba(99, 102, 241, 0.1);
-  --border: rgba(255, 255, 255, 0.06);
-  --border-hover: rgba(255, 255, 255, 0.1);
-  --radius-sm: 6px;
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --bg-hover: #1c2128;
+  --bg-active: #292e36;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #484f58;
+  --text-accent: #58a6ff;
+  --accent: #a78bfa;
+  --accent-hover: #8b5cf6;
+  --accent-muted: rgba(167, 139, 250, 0.12);
+  --accent-glow: rgba(167, 139, 250, 0.2);
+  --border: #30363d;
+  --border-muted: #21262d;
+  --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-full: 9999px;
   --easing: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --sidebar-width: 260px;
+  --note-list-width: 300px;
+  --header-height: 48px;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --font-size-xs: 0.6875rem;
+  --font-size-sm: 0.813rem;
+  --font-size-base: 0.875rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.375rem;
 }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -173,9 +194,14 @@ a:hover { color: var(--accent-hover); }
 
 
 def sidebar_html(active="notes", tags=None):
-    nav_items = {"notes": {"label": "Notes", "href": "/"}, "graph": {"label": "Graph", "href": "/graph"}}
+    nav_items = {"notes": {"label": "Notes", "href": "/", "icon": "file-text"}, "graph": {"label": "Graph", "href": "/graph", "icon": "graph"}}
+    notes_svg = '<path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>'
+    graph_svg = '<circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
     nav_links = "".join(
-        f'<a href="{v["href"]}" class="sidebar-link{" active" if k == active else ""}">{v["label"]}</a>'
+        f'<a href="{v["href"]}" class="sidebar-link{" active" if k == active else ""}">'
+        f'<svg class="sidebar-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">'
+        f'{notes_svg if v["icon"] == "file-text" else graph_svg}'
+        f'</svg>{v["label"]}</a>'
         for k, v in nav_items.items()
     )
     tag_links = ""
@@ -220,6 +246,24 @@ def render_page(title, body, active="notes"):
     <button class="hamburger" id="hamburgerBtn" onclick="toggleSidebar()" aria-label="Toggle sidebar">
         <span></span><span></span><span></span>
     </button>
+    <div class="toast-container" id="toastContainer"></div>
+    <div class="hotkeys-btn" id="hotkeysBtn" onclick="toggleHotkeys()" title="Keyboard shortcuts">?</div>
+    <div class="hotkeys-modal" id="hotkeysModal">
+        <div class="hotkeys-overlay" onclick="toggleHotkeys()"></div>
+        <div class="hotkeys-content">
+            <div class="hotkeys-header">
+                <h3>Keyboard Shortcuts</h3>
+                <button class="hotkeys-close" onclick="toggleHotkeys()">&times;</button>
+            </div>
+            <div class="hotkeys-list">
+                <div class="hotkey-row"><span class="hotkey-keys"><kbd>Ctrl</kbd> + <kbd>B</kbd></span><span class="hotkey-desc">Bold</span></div>
+                <div class="hotkey-row"><span class="hotkey-keys"><kbd>Ctrl</kbd> + <kbd>I</kbd></span><span class="hotkey-desc">Italic</span></div>
+                <div class="hotkey-row"><span class="hotkey-keys"><kbd>Ctrl</kbd> + <kbd>S</kbd></span><span class="hotkey-desc">Save note</span></div>
+                <div class="hotkey-row"><span class="hotkey-keys"><kbd>Ctrl</kbd> + <kbd>K</kbd></span><span class="hotkey-desc">Search notes</span></div>
+                <div class="hotkey-row"><span class="hotkey-keys"><kbd>Esc</kbd></span><span class="hotkey-desc">Close modal / Cancel</span></div>
+            </div>
+        </div>
+    </div>
     <div class="app-layout">
         {sb}
         <main class="main-content">
@@ -237,6 +281,40 @@ def render_page(title, body, active="notes"):
         section.classList.toggle('collapsed');
         chevron.classList.toggle('rotated');
     }}
+    function showToast(message, type) {{
+        var container = document.getElementById('toastContainer');
+        var toast = document.createElement('div');
+        toast.className = 'toast toast-' + type;
+        toast.textContent = message;
+        container.appendChild(toast);
+        setTimeout(function() {{
+            toast.classList.add('toast-exit');
+            setTimeout(function() {{ toast.remove(); }}, 300);
+        }}, 4000);
+    }}
+    function toggleHotkeys() {{
+        document.getElementById('hotkeysModal').classList.toggle('open');
+    }}
+    document.addEventListener('keydown', function(e) {{
+        if (e.key === 'Escape') {{
+            var modal = document.getElementById('hotkeysModal');
+            if (modal && modal.classList.contains('open')) {{
+                modal.classList.remove('open');
+            }}
+        }}
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {{
+            e.preventDefault();
+            var input = document.getElementById('searchInput');
+            if (input) input.focus();
+        }}
+        if ((e.ctrlKey || e.metaKey) && e.key === 's') {{
+            var saveBtn = document.querySelector('.editor-actions .btn-primary');
+            if (saveBtn && typeof saveNote === 'function') {{
+                e.preventDefault();
+                saveNote();
+            }}
+        }}
+    }});
     </script>
 </body>
 </html>"""
@@ -329,7 +407,14 @@ async def home(request: Request, q: str = "", tag: str = ""):
         </div>"""
 
     if not note_cards:
-        note_cards = '<div class="empty"><p>No notes yet. Create your first one!</p></div>'
+        skeleton = ""
+        if not q and not tag:
+            skeleton = """
+            <div class="skeleton-note"><div class="skeleton-line w-60"></div><div class="skeleton-line w-30"></div><div class="skeleton-line w-80"></div></div>
+            <div class="skeleton-note"><div class="skeleton-line w-50"></div><div class="skeleton-line w-40"></div><div class="skeleton-line w-70"></div></div>
+            <div class="skeleton-note"><div class="skeleton-line w-65"></div><div class="skeleton-line w-25"></div><div class="skeleton-line w-75"></div></div>
+            """
+        note_cards = '<div class="empty"><p>No notes yet. Create your first one!</p></div>' + skeleton
 
     body = f"""
     <div class="page-header">
@@ -384,7 +469,7 @@ async def view_note(name: str):
                     <a href="/api/export-html/{name}" class="dropdown-item" target="_blank">Export HTML</a>
                 </div>
             </div>
-            <button class="btn btn-danger" onclick="if(confirm('Delete?'))fetch('/api/note/{name}',{{method:'DELETE'}}).then(()=>window.location='/')">Delete</button>
+            <button class="btn btn-danger" onclick="if(confirm('Delete?')){{showToast('Note deleted','success');fetch('/api/note/{name}',{{method:'DELETE'}}).then(function(){{setTimeout(function(){{window.location='/'}},300);}});}}">Delete</button>
         </div>
     <script>
     function toggleExport(e) {{
@@ -694,6 +779,7 @@ async def edit_note(name: str):
             btn.disabled = false;
             btn.classList.remove('btn-saving');
             btn.classList.add('btn-saved');
+            showToast('Note saved', 'success');
             setTimeout(function() {{
                 window.location = '/note/' + d.name;
             }}, 600);
@@ -701,6 +787,7 @@ async def edit_note(name: str):
             btn.textContent = originalText;
             btn.disabled = false;
             btn.classList.remove('btn-saving');
+            showToast('Save failed', 'error');
         }});
     }}
     </script>
@@ -725,33 +812,103 @@ async def graph_page():
     fetch('/api/graph')
         .then(r => r.json())
         .then(data => {{
-            const width = document.getElementById('graph').clientWidth;
-            const height = document.getElementById('graph').clientHeight;
-            const svg = d3.select('#graph').append('svg')
+            var container = document.getElementById('graph');
+            var width = container.clientWidth;
+            var height = container.clientHeight;
+            var linkCounts = {{}};
+            data.links.forEach(function(l) {{
+                linkCounts[l.source] = (linkCounts[l.source] || 0) + 1;
+                linkCounts[l.target] = (linkCounts[l.target] || 0) + 1;
+            }});
+            var maxLinks = Math.max(1, ...Object.values(linkCounts));
+            var svg = d3.select('#graph').append('svg')
                 .attr('width', width).attr('height', height);
-            const simulation = d3.forceSimulation(data.nodes)
-                .force('link', d3.forceLink(data.links).id(d => d.id).distance(100))
-                .force('charge', d3.forceManyBody().strength(-200))
-                .force('center', d3.forceCenter(width / 2, height / 2));
-            const link = svg.append('g').selectAll('line')
+            var defs = svg.append('defs');
+            data.nodes.forEach(function(d) {{
+                var id = 'glow-' + d.id.replace(/[^a-zA-Z0-9]/g, '');
+                defs.append('radialGradient').attr('id', id)
+                    .attr('cx', '50%').attr('cy', '50%').attr('r', '50%')
+                    .append('stop').attr('offset', '0%')
+                    .attr('stop-color', 'var(--accent)').attr('stop-opacity', 0.4);
+                defs.append('radialGradient').attr('id', id + '-g')
+                    .attr('cx', '50%').attr('cy', '50%').attr('r', '50%')
+                    .append('stop').attr('offset', '0%')
+                    .attr('stop-color', 'var(--accent)').attr('stop-opacity', 0.15);
+            }});
+            var g = svg.append('g');
+            var zoom = d3.zoom()
+                .scaleExtent([0.1, 4])
+                .on('zoom', function(e) {{ g.attr('transform', e.transform); }});
+            svg.call(zoom);
+            var simulation = d3.forceSimulation(data.nodes)
+                .force('link', d3.forceLink(data.links).id(function(d) {{ return d.id; }}).distance(120))
+                .force('charge', d3.forceManyBody().strength(-250))
+                .force('center', d3.forceCenter(width / 2, height / 2))
+                .force('collision', d3.forceCollide().radius(function(d) {{
+                    return 6 + 14 * (linkCounts[d.id] || 0) / maxLinks;
+                }}));
+            var link = g.append('g').selectAll('line')
                 .data(data.links).enter().append('line')
-                .attr('stroke', 'var(--border)').attr('stroke-width', 1.5);
-            const node = svg.append('g').selectAll('g')
+                .attr('stroke', 'var(--border)').attr('stroke-width', 1);
+            var node = g.append('g').selectAll('g')
                 .data(data.nodes).enter().append('g')
+                .style('cursor', 'pointer')
                 .call(d3.drag()
-                    .on('start', (e, d) => {{ if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }})
-                    .on('drag', (e, d) => {{ d.fx = e.x; d.fy = e.y; }})
-                    .on('end', (e, d) => {{ if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }}));
-            node.append('circle').attr('r', 6).attr('fill', 'var(--accent)');
-            node.append('text').text(d => d.id)
-                .attr('x', 12).attr('y', 4)
+                    .on('start', function(e, d) {{
+                        if (!e.active) simulation.alphaTarget(0.3).restart();
+                        d.fx = d.x;
+                        d.fy = d.y;
+                    }})
+                    .on('drag', function(e, d) {{ d.fx = e.x; d.fy = e.y; }})
+                    .on('end', function(e, d) {{
+                        if (!e.active) simulation.alphaTarget(0);
+                        d.fx = null;
+                        d.fy = null;
+                    }}));
+            node.append('circle')
+                .attr('r', function(d) {{ return 6 + 14 * (linkCounts[d.id] || 0) / maxLinks; }})
+                .attr('fill', 'var(--accent)')
+                .attr('stroke', 'var(--bg-primary)')
+                .attr('stroke-width', 2)
+                .style('transition', 'filter 0.2s var(--easing)');
+            node.append('text').text(function(d) {{ return d.id; }})
+                .attr('x', function(d) {{ return 6 + 14 * (linkCounts[d.id] || 0) / maxLinks + 6; }})
+                .attr('y', 4)
                 .attr('fill', 'var(--text-secondary)').attr('font-size', '12px')
                 .attr('font-family', "'Inter', system-ui, sans-serif");
-            node.on('click', (e, d) => {{ window.location = '/note/' + d.id; }});
-            simulation.on('tick', () => {{
-                link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-                    .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
-                node.attr('transform', d => `translate(${{d.x}},${{d.y}})`);
+            node.on('mouseenter', function(e, d) {{
+                var r = 6 + 14 * (linkCounts[d.id] || 0) / maxLinks;
+                d3.select(this).select('circle')
+                    .attr('fill', 'var(--accent-hover)')
+                    .attr('r', r * 1.3)
+                    .style('filter', 'brightness(1.3) drop-shadow(0 0 8px var(--accent-glow))');
+                d3.select(this).select('text')
+                    .attr('fill', 'var(--text-primary)')
+                    .attr('font-weight', '500');
+                link.attr('stroke', function(l) {{
+                    return l.source.id === d.id || l.target.id === d.id ? 'var(--accent-muted)' : 'var(--border)';
+                }}).attr('stroke-width', function(l) {{
+                    return l.source.id === d.id || l.target.id === d.id ? 2 : 1;
+                }});
+            }})
+            .on('mouseleave', function(e, d) {{
+                var r = 6 + 14 * (linkCounts[d.id] || 0) / maxLinks;
+                d3.select(this).select('circle')
+                    .attr('fill', 'var(--accent)')
+                    .attr('r', r)
+                    .style('filter', 'none');
+                d3.select(this).select('text')
+                    .attr('fill', 'var(--text-secondary)')
+                    .attr('font-weight', '400');
+                link.attr('stroke', 'var(--border)').attr('stroke-width', 1);
+            }});
+            node.on('click', function(e, d) {{ window.location = '/note/' + d.id; }});
+            simulation.on('tick', function() {{
+                link.attr('x1', function(d) {{ return d.source.x; }})
+                    .attr('y1', function(d) {{ return d.source.y; }})
+                    .attr('x2', function(d) {{ return d.target.x; }})
+                    .attr('y2', function(d) {{ return d.target.y; }});
+                node.attr('transform', function(d) {{ return 'translate(' + d.x + ',' + d.y + ')'; }});
             }});
         }});
     </script>
