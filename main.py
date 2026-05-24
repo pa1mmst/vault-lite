@@ -3,7 +3,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request, File, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
@@ -12,6 +12,12 @@ from vault import (
     read_note, write_note, delete_note, list_notes,
     parse_tags, parse_wikilinks, strip_frontmatter, note_exists,
 )
+
+try:
+    from weasyprint import HTML as WeasyPrintHTML
+    HAS_WEASYPRINT = True
+except ImportError:
+    HAS_WEASYPRINT = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -179,6 +185,11 @@ a:hover { text-decoration: underline; }
 .backlinks-panel .backlink-item { display: block; padding: 8px 12px; margin-bottom: 4px; border-radius: 4px; color: #7c83fd; font-size: 0.9rem; }
 .backlinks-panel .backlink-item:hover { background: #2a2a4a; text-decoration: none; }
 .backlinks-panel .backlink-empty { color: #666; font-size: 0.85rem; font-style: italic; }
+.dropdown { position: relative; display: inline-block; }
+.dropdown-menu { display: none; position: absolute; top: 100%; left: 0; background: #16213e; border: 1px solid #333; border-radius: 8px; margin-top: 4px; min-width: 160px; z-index: 100; overflow: hidden; }
+.dropdown-menu.show { display: block; }
+.dropdown-item { display: block; padding: 10px 16px; color: #e0e0e0; text-decoration: none; font-size: 0.9rem; }
+.dropdown-item:hover { background: #2a2a4a; text-decoration: none; }
 """
 
 
@@ -207,6 +218,48 @@ def header(active="notes"):
     }
     nav = "".join(v for k, v in items.items() if k != active)
     return f'<div class="header"><h1><a href="/">🗄 vault-lite</a></h1><div class="nav">{nav}</div></div>'
+
+
+# ── Export helpers ─────────────────────────────────────────────
+
+EXPORT_STYLE = """
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #fff; color: #333; padding: 40px 20px; line-height: 1.6; }
+.container { max-width: 800px; margin: 0 auto; }
+a { color: #7c83fd; text-decoration: none; }
+h1, h2, h3 { margin: 20px 0 10px; }
+p { margin: 10px 0; line-height: 1.7; }
+ul { margin: 10px 0; padding-left: 24px; }
+li { margin: 4px 0; }
+code { background: #f0f0f0; padding: 2px 6px; border-radius: 4px; font-size: 0.9rem; }
+pre { background: #f5f5f5; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 12px 0; }
+img { max-width: 100%; height: auto; border-radius: 4px; margin: 8px 0; }
+blockquote { border-left: 3px solid #7c83fd; padding-left: 16px; margin: 12px 0; color: #666; }
+hr { border: none; border-top: 1px solid #ddd; margin: 24px 0; }
+.tag { display: inline-block; padding: 2px 8px; background: #eee; border-radius: 4px; font-size: 0.8rem; color: #7c83fd; margin-right: 4px; margin-bottom: 4px; }
+.tags { margin: 8px 0 16px; }
+"""
+
+
+def render_export_html(name, html_content, tags):
+    tags_html = "".join(f'<a class="tag">#{t}</a>' for t in tags)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{name}</title>
+    <style>{EXPORT_STYLE}</style>
+</head>
+<body>
+    <div class="container">
+        <h1>{name}</h1>
+        <div class="tags">{tags_html}</div>
+        <hr>
+        {html_content}
+    </div>
+</body>
+</html>"""
 
 
 # ── Routes ────────────────────────────────────────────────────
@@ -291,10 +344,27 @@ async def view_note(name: str):
         <h2>{name}</h2>
         <div class="tags">{tags_html}</div>
         <div class="content">{html_content}</div>
-        <div style="margin-top:24px; display:flex; gap:12px;">
+        <div style="margin-top:24px; display:flex; gap:12px; align-items:center;">
             <a href="/edit/{name}" class="btn">✏️ Edit</a>
+            <div class="dropdown">
+                <button class="btn" style="background:#555;" onclick="toggleExport(event)">📥 Export ▾</button>
+                <div class="dropdown-menu" id="exportMenu">
+                    <a href="/api/export-pdf/{name}" class="dropdown-item" target="_blank">📕 Export PDF</a>
+                    <a href="/api/export-html/{name}" class="dropdown-item" target="_blank">🌐 Export HTML</a>
+                </div>
+            </div>
             <button class="btn btn-danger" onclick="if(confirm('Delete?'))fetch('/api/note/{name}',{{method:'DELETE'}}).then(()=>window.location='/')">🗑 Delete</button>
         </div>
+    <script>
+    function toggleExport(e) {{
+        e.stopPropagation();
+        document.getElementById('exportMenu').classList.toggle('show');
+    }}
+    document.addEventListener('click', function() {{
+        var m = document.getElementById('exportMenu');
+        if (m) m.classList.remove('show');
+    }});
+    </script>
         {backlinks_html}
     </div>
     """
@@ -714,3 +784,49 @@ async def api_upload(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# ── Export ─────────────────────────────────────────────────
+
+@app.get("/api/export-html/{name}")
+async def export_html(name: str):
+    note = read_note(name)
+    if not note:
+        return JSONResponse({"error": "Note not found"}, status_code=404)
+
+    content = strip_frontmatter(note["content"])
+    html_content = md_to_html(content)
+    tags = parse_tags(note["content"])
+
+    html = render_export_html(name, html_content, tags)
+    return Response(
+        content=html,
+        media_type="text/html",
+        headers={"Content-Disposition": f'attachment; filename="{name}.html"'},
+    )
+
+
+@app.get("/api/export-pdf/{name}")
+async def export_pdf(name: str):
+    note = read_note(name)
+    if not note:
+        return JSONResponse({"error": "Note not found"}, status_code=404)
+
+    if not HAS_WEASYPRINT:
+        return JSONResponse({"error": "PDF generation unavailable - weasyprint not installed"}, status_code=500)
+
+    content = strip_frontmatter(note["content"])
+    html_content = md_to_html(content)
+    tags = parse_tags(note["content"])
+
+    html = render_export_html(name, html_content, tags)
+    try:
+        pdf_bytes = WeasyPrintHTML(string=html).write_pdf()
+    except Exception as e:
+        return JSONResponse({"error": f"PDF generation failed: {e}"}, status_code=500)
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'},
+    )

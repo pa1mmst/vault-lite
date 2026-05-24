@@ -254,3 +254,46 @@ class TestImageUpload:
         assert r.status_code == 200
         assert "paste" in r.text
         assert "clipboardData" in r.text or "getAsFile" in r.text
+
+
+class TestExport:
+    def test_export_html(self, client):
+        client.post("/api/note", json={"name": "export-test", "content": "# Hello\n\nThis is **bold** and *italic*."})
+        r = client.get("/api/export-html/export-test")
+        assert r.status_code == 200
+        assert "text/html" in r.headers["content-type"]
+        assert "export-test.html" in r.headers.get("content-disposition", "")
+        assert "Hello" in r.text
+        assert "<strong>bold</strong>" in r.text
+
+    def test_export_html_404(self, client):
+        r = client.get("/api/export-html/nonexistent")
+        assert r.status_code == 404
+
+    def test_export_html_has_tags(self, client):
+        client.post("/api/note", json={"name": "tagged-note", "content": "# Tagged\n\n#tag1 and #tag2"})
+        r = client.get("/api/export-html/tagged-note")
+        assert r.status_code == 200
+        assert "#tag1" in r.text
+        assert "#tag2" in r.text
+
+    def test_export_pdf(self, client):
+        pytest.importorskip("weasyprint")
+        client.post("/api/note", json={"name": "pdf-test", "content": "# PDF Title\n\nExport content."})
+        r = client.get("/api/export-pdf/pdf-test")
+        assert r.status_code == 200
+        assert "application/pdf" in r.headers["content-type"]
+        assert "pdf-test.pdf" in r.headers.get("content-disposition", "")
+
+    def test_export_pdf_404(self, client):
+        r = client.get("/api/export-pdf/nonexistent")
+        assert r.status_code == 404
+
+    def test_export_dropdown_on_note_page(self, client):
+        client.post("/api/note", json={"name": "export-page", "content": "# Test"})
+        r = client.get("/note/export-page")
+        assert r.status_code == 200
+        assert "Export" in r.text
+        assert "export-pdf" in r.text
+        assert "export-html" in r.text
+        assert "toggleExport" in r.text
