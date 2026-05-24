@@ -144,6 +144,13 @@
   border-radius: 0;
 }
 
+.preview-pane img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin: 8px 0;
+}
+
 .preview-pane .wikilink {
   color: #7c83fd;
   font-weight: 500;

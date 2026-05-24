@@ -175,3 +175,82 @@ class TestEditor:
         r = client.get("/static/style.css")
         assert r.status_code == 200
         assert "toolbar" in r.text
+
+
+class TestImageUpload:
+    def test_upload_png(self, client):
+        r = client.post("/api/upload", files={"file": ("test.png", b"fake-png-content", "image/png")})
+        assert r.status_code == 200
+        data = r.json()
+        assert "url" in data
+        assert data["url"].startswith("/static/uploads/")
+        assert data["url"].endswith(".png")
+
+    def test_upload_jpg(self, client):
+        r = client.post("/api/upload", files={"file": ("photo.jpg", b"fake-jpg-content", "image/jpeg")})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["url"].endswith(".jpg")
+
+    def test_upload_gif(self, client):
+        r = client.post("/api/upload", files={"file": ("anim.gif", b"fake-gif-content", "image/gif")})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["url"].endswith(".gif")
+
+    def test_upload_webp(self, client):
+        r = client.post("/api/upload", files={"file": ("img.webp", b"fake-webp-content", "image/webp")})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["url"].endswith(".webp")
+
+    def test_upload_svg(self, client):
+        r = client.post("/api/upload", files={"file": ("vector.svg", b"<svg></svg>", "image/svg+xml")})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["url"].endswith(".svg")
+
+    def test_upload_rejects_unsupported_type(self, client):
+        r = client.post("/api/upload", files={"file": ("document.pdf", b"pdf-content", "application/pdf")})
+        assert r.status_code == 400
+        assert "not allowed" in r.text
+
+    def test_upload_rejects_too_large(self, client):
+        large_data = b"x" * (5 * 1024 * 1024 + 1)
+        r = client.post("/api/upload", files={"file": ("large.png", large_data, "image/png")})
+        assert r.status_code == 400
+        assert "too large" in r.text.lower() or "5 MB" in r.text
+
+    def test_upload_file_accessible_via_static(self, client):
+        r = client.post("/api/upload", files={"file": ("serve-test.png", b"content", "image/png")})
+        assert r.status_code == 200
+        url = r.json()["url"]
+        r2 = client.get(url)
+        assert r2.status_code == 200
+        assert r2.content == b"content"
+
+    def test_upload_creates_uploads_dir(self, client):
+        import os, shutil
+        upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "uploads")
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        r = client.post("/api/upload", files={"file": ("fresh.png", b"data", "image/png")})
+        assert r.status_code == 200
+        assert os.path.isdir(upload_dir)
+
+    def test_editor_has_image_button(self, client):
+        r = client.get("/edit/test-editor")
+        assert r.status_code == 200
+        assert 'data-cmd="image"' in r.text
+
+    def test_editor_has_drag_drop_handlers(self, client):
+        r = client.get("/edit/test-editor")
+        assert r.status_code == 200
+        assert "dragover" in r.text
+        assert "drop" in r.text
+        assert "uploadImage" in r.text
+
+    def test_editor_has_clipboard_paste_handler(self, client):
+        r = client.get("/edit/test-editor")
+        assert r.status_code == 200
+        assert "paste" in r.text
+        assert "clipboardData" in r.text or "getAsFile" in r.text

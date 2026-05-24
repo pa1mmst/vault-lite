@@ -1,7 +1,8 @@
 import os
 import json
+import uuid
 from datetime import datetime, timezone
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, File, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
@@ -112,6 +113,8 @@ def inline(text):
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
     # Italic
     text = re.sub(r"\*(.+?)\*", r"<em>\1</em>", text)
+    # Images ![alt](url)
+    text = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", r'<img src="\2" alt="\1">', text)
     # Wiki-links [[name]]
     text = re.sub(r"\[\[([^\]]+)\]\]", r'<a href="/note/\1" class="wikilink">\1</a>', text)
     # Regular links [text](url)
@@ -157,6 +160,7 @@ a:hover { text-decoration: underline; }
 .preview-pane ul { margin: 8px 0; padding-left: 24px; }
 .preview-pane code { background: #2a2a4a; padding: 2px 6px; border-radius: 4px; font-size: 0.9rem; }
 .preview-pane pre { background: #2a2a4a; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 12px 0; }
+.preview-pane img { max-width: 100%; height: auto; border-radius: 4px; margin: 8px 0; }
 .preview-pane .wikilink { color: #7c83fd; font-weight: 500; }
 .editor-actions { display: flex; gap: 12px; margin-top: 12px; }
 .note-view { max-width: 800px; }
@@ -317,6 +321,7 @@ async def edit_note(name: str):
                 <button type="button" data-cmd="h3" title="Heading 3">H3</button>
                 <span class="separator"></span>
                 <button type="button" data-cmd="link" title="Link">🔗</button>
+                <button type="button" data-cmd="image" title="Image">🖼</button>
                 <button type="button" data-cmd="code" title="Code">&lt;/&gt;</button>
                 <button type="button" data-cmd="list" title="List">•</button>
                 <button type="button" data-cmd="quote" title="Quote">❝</button>
@@ -375,6 +380,11 @@ async def edit_note(name: str):
             case 'link': {{
                 const wrap = sel || 'text';
                 insert(ta, `[${{wrap}}](url)`, 1);
+                break;
+            }}
+            case 'image': {{
+                const wrap = sel || 'alt text';
+                insert(ta, `![${{wrap}}](url)`, 1);
                 break;
             }}
             case 'code': {{
@@ -445,6 +455,58 @@ async def edit_note(name: str):
         }}
     }});
 
+    // ── Image upload ─────────────────────────────────────
+    async function uploadImage(file) {{
+        const formData = new FormData();
+        formData.append('file', file);
+        const resp = await fetch('/api/upload', {{ method: 'POST', body: formData }});
+        const data = await resp.json();
+        if (data.url) {{
+            const ta = editor;
+            const pos = ta.selectionStart;
+            const before = ta.value.substring(0, pos);
+            const after = ta.value.substring(ta.selectionEnd);
+            const imgMd = `![](${{data.url}})\n`;
+            ta.value = before + imgMd + after;
+            const newPos = pos + imgMd.length;
+            ta.setSelectionRange(newPos, newPos);
+            ta.dispatchEvent(new Event('input'));
+            schedulePreview();
+        }}
+    }}
+
+    // Drag and drop
+    editor.addEventListener('dragover', function(e) {{
+        e.preventDefault();
+        editor.style.outline = '2px dashed #7c83fd';
+    }});
+    editor.addEventListener('dragleave', function(e) {{
+        e.preventDefault();
+        editor.style.outline = '';
+    }});
+    editor.addEventListener('drop', async function(e) {{
+        e.preventDefault();
+        editor.style.outline = '';
+        const files = e.dataTransfer.files;
+        for (const file of files) {{
+            if (file.type.startsWith('image/')) {{
+                await uploadImage(file);
+            }}
+        }}
+    }});
+
+    // Paste from clipboard
+    editor.addEventListener('paste', async function(e) {{
+        const items = e.clipboardData.items;
+        for (const item of items) {{
+            if (item.type.startsWith('image/')) {{
+                e.preventDefault();
+                const file = item.getAsFile();
+                if (file) await uploadImage(file);
+            }}
+        }}
+    }});
+
     function updatePreview() {{
         preview.innerHTML = markdownToHtml(editor.value);
     }}
@@ -507,6 +569,7 @@ async def edit_note(name: str):
         text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
         text = text.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
         text = text.replace(/\\*(.+?)\\*/g, '<em>$1</em>');
+        text = text.replace(/!\\[([^\\]]*)\\]\\(([^)]+)\\)/g, '<img src="$2" alt="$1">');
         text = text.replace(/\\[\\[([^\\]]+)\\]\\]/g, '<a href="/note/$1" class="wikilink">$1</a>');
         text = text.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
         text = text.replace(/(?<!\\w)#([a-zA-Zа-яА-ЯёЁ][a-zA-Zа-яА-ЯёЁ0-9_\\-/]*)/g, '<a href="/?tag=$1" class="tag">#$1</a>');
@@ -616,6 +679,36 @@ def api_delete_note(name: str):
     delete_note(name)
     remove_note(name)
     return JSONResponse({"ok": True})
+
+
+# ── Image upload ──────────────────────────────────────────
+
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+
+
+@app.post("/api/upload")
+async def api_upload(file: UploadFile = File(...)):
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return JSONResponse(
+            {"error": f"File type '{ext}' not allowed. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"},
+            status_code=400,
+        )
+
+    contents = await file.read()
+    if len(contents) > MAX_FILE_SIZE:
+        return JSONResponse({"error": "File too large. Maximum size is 5 MB."}, status_code=400)
+
+    upload_dir = os.path.join(os.path.dirname(__file__), "static", "uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+
+    filename = f"{uuid.uuid4().hex}{ext}"
+    filepath = os.path.join(upload_dir, filename)
+    with open(filepath, "wb") as f:
+        f.write(contents)
+
+    return JSONResponse({"url": f"/static/uploads/{filename}"})
 
 
 @app.get("/health")
