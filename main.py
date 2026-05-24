@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
         index_note(note["name"], note["content"], note["created_at"], note["updated_at"], tags, links)
     yield
 
-app = FastAPI(title="vault-lite", lifespan=lifespan)
+app = FastAPI(title="folio", lifespan=lifespan)
 
 # ── Static files ──────────────────────────────────────────────
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -135,34 +135,40 @@ def inline(text):
 # ── HTML template ─────────────────────────────────────────────
 BASE_STYLE = """
 :root {
-  --bg-page: #08090a;
-  --bg-panel: #0f1011;
-  --bg-elevated: #191a1b;
-  --bg-hover: #28282c;
-  --text-primary: #f7f8f8;
-  --text-secondary: #d0d6e0;
-  --text-muted: #8a8f98;
-  --accent: #5e6ad2;
-  --accent-violet: #7170ff;
-  --border-subtle: rgba(255,255,255,0.05);
-  --border: rgba(255,255,255,0.08);
+  --bg-primary: #0f0f0f;
+  --bg-secondary: #1a1a1a;
+  --bg-tertiary: #232323;
+  --bg-hover: #2a2a2a;
+  --text-primary: #ffffff;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --accent: #6366f1;
+  --accent-hover: #818cf8;
+  --accent-muted: rgba(99, 102, 241, 0.1);
+  --border: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(255, 255, 255, 0.1);
   --radius-sm: 6px;
   --radius-md: 8px;
+  --radius-lg: 12px;
   --radius-full: 9999px;
-  --space: 8px;
+  --easing: cubic-bezier(0.16, 1, 0.3, 1);
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
-* { box-sizing:border-box; margin:0; padding:0; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  font-family:'Inter',system-ui,-apple-system,sans-serif;
-  background:var(--bg-page);
-  color:var(--text-primary);
-  font-size:15px;font-weight:400;line-height:1.6;
-  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
-  min-height:100vh;
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
 }
-a { color:var(--accent);text-decoration:none;transition:color .15s; }
-a:hover { color:var(--accent-violet); }
-.app-layout { display:flex;max-width:1200px;margin:0 auto;min-height:100vh; }
+a { color: var(--accent); text-decoration: none; transition: color 0.2s var(--easing); }
+a:hover { color: var(--accent-hover); }
 """
 
 
@@ -176,12 +182,20 @@ def sidebar_html(active="notes", tags=None):
     if tags:
         for t in tags:
             tag_links += f'<a href="/?tag={t["tag"]}" class="sidebar-tag">#{t["tag"]}</a>'
-    return f"""<aside class="sidebar">
-  <div class="sidebar-brand"><a href="/" class="sidebar-logo">folio</a></div>
+    return f"""<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-brand"><a href="/">folio</a></div>
+    <button class="sidebar-close" onclick="toggleSidebar()" aria-label="Close sidebar">&times;</button>
+  </div>
   <nav class="sidebar-nav">{nav_links}</nav>
   <div class="sidebar-section">
-    <div class="sidebar-section-title">Tags</div>
-    <div class="sidebar-tags">{tag_links}</div>
+    <button class="sidebar-collapse-btn" onclick="toggleTagSection()" id="tagToggle">
+      <svg class="chevron" id="tagChevron" width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Tags
+    </button>
+    <div class="sidebar-tags" id="tagSection">{tag_links}</div>
   </div>
 </aside>"""
 
@@ -194,7 +208,7 @@ def render_page(title, body, active="notes"):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title} — vault-lite</title>
+    <title>{title} — folio</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -202,12 +216,28 @@ def render_page(title, body, active="notes"):
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+    <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+    <button class="hamburger" id="hamburgerBtn" onclick="toggleSidebar()" aria-label="Toggle sidebar">
+        <span></span><span></span><span></span>
+    </button>
     <div class="app-layout">
         {sb}
         <main class="main-content">
             {body}
         </main>
     </div>
+    <script>
+    function toggleSidebar() {{
+        document.getElementById('sidebar').classList.toggle('open');
+        document.getElementById('sidebarOverlay').classList.toggle('open');
+    }}
+    function toggleTagSection() {{
+        var section = document.getElementById('tagSection');
+        var chevron = document.getElementById('tagChevron');
+        section.classList.toggle('collapsed');
+        chevron.classList.toggle('rotated');
+    }}
+    </script>
 </body>
 </html>"""
 
@@ -283,10 +313,18 @@ async def home(request: Request, q: str = "", tag: str = ""):
         tags = parse_tags(note_data["content"]) if note_data else []
         tags_html = "".join(f'<a href="/?tag={t}" class="tag">#{t}</a>' for t in tags[:5])
         updated = n.get("updated_at", "")[:10]
+        content_preview = ""
+        if note_data:
+            raw_lines = [l.strip() for l in note_data["content"].split("\n") if l.strip()]
+            for line in raw_lines:
+                if not line.startswith("---") and not line.startswith("# "):
+                    content_preview = line[:140]
+                    break
         note_cards += f"""
         <div class="note-card">
-            <h3><a href="/note/{n['name']}">{n['name']}</a></h3>
-            <div class="meta">{updated}</div>
+            <div class="note-card-title"><a href="/note/{n['name']}">{n['name']}</a></div>
+            <div class="note-card-meta">{updated}</div>
+            {'<div class="note-card-preview">' + content_preview + '</div>' if content_preview else ''}
             <div class="tags">{tags_html}</div>
         </div>"""
 
@@ -336,7 +374,7 @@ async def view_note(name: str):
         <a href="/" class="back-link">Back to notes</a>
         <h2>{name}</h2>
         <div class="tags">{tags_html}</div>
-        <div class="content">{html_content}</div>
+        <div class="note-view-content">{html_content}</div>
         <div class="note-view-actions">
             <a href="/edit/{name}" class="btn">Edit</a>
             <div class="dropdown">
@@ -642,13 +680,33 @@ async def edit_note(name: str):
         const content = editor.value;
         const name = '{name}' === 'new' ? prompt('Note name:') : '{name}';
         if (!name) return;
+        const btn = document.querySelector('.editor-actions .btn-primary');
+        const originalText = btn.textContent;
+        btn.textContent = 'Saving...';
+        btn.disabled = true;
+        btn.classList.add('btn-saving');
         fetch('/api/note', {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
             body: JSON.stringify({{name, content}})
         }}).then(r => r.json()).then(d => {{
-            window.location = '/note/' + d.name;
+            btn.textContent = 'Saved!';
+            btn.disabled = false;
+            btn.classList.remove('btn-saving');
+            btn.classList.add('btn-saved');
+            setTimeout(function() {{
+                window.location = '/note/' + d.name;
+            }}, 600);
+        }}).catch(function() {{
+            btn.textContent = originalText;
+            btn.disabled = false;
+            btn.classList.remove('btn-saving');
         }});
+    }}
+    </script>
+    <script>
+    if ('{name}' === 'new') {{
+        editor.focus();
     }}
     </script>
     """
