@@ -609,14 +609,20 @@ async def edit_note(name: str):
     note = read_note(name)
     content = note["content"] if note else f"# {name}\n\nStart writing...\n"
     is_new = " (new)" if not note else ""
-
     body = f"""
-    <div class="editor-title">Edit: {name}{is_new}</div>
+    <div class="editor-title" style="display:flex;align-items:center;gap:10px">
+        <span>Edit: {name}{is_new}</span>
+        <span class="editor-status" id="editorStatus"></span>
+    </div>
     <div class="editor-layout">
         <div class="editor-pane">
             <div class="toolbar" id="toolbar">
+                <button type="button" data-cmd="undo" title="Undo (Ctrl+Z)">&#x21A9;</button>
+                <button type="button" data-cmd="redo" title="Redo (Ctrl+Shift+Z)">&#x21AA;</button>
+                <span class="separator"></span>
                 <button type="button" data-cmd="bold" title="Bold (Ctrl+B)"><strong>B</strong></button>
                 <button type="button" data-cmd="italic" title="Italic (Ctrl+I)"><em>I</em></button>
+                <button type="button" data-cmd="strikethrough" title="Strikethrough"><span style="text-decoration:line-through">S</span></button>
                 <span class="separator"></span>
                 <button type="button" data-cmd="h1" title="Heading 1">H1</button>
                 <button type="button" data-cmd="h2" title="Heading 2">H2</button>
@@ -627,8 +633,13 @@ async def edit_note(name: str):
                 <button type="button" data-cmd="code" title="Code">&lt;/&gt;</button>
                 <button type="button" data-cmd="list" title="List">List</button>
                 <button type="button" data-cmd="quote" title="Quote">Quote</button>
+                <span class="separator"></span>
+                <button type="button" data-cmd="sourceToggle" title="Toggle source view" class="toolbar-toggle" id="sourceToggleBtn">&lt;/&gt;</button>
+                <span class="editor-word-count" id="wordCount"></span>
             </div>
-            <textarea id="editor">{content}</textarea>
+            <div id="wysiwygEditor" contenteditable="true" class="wysiwyg-editor"></div>
+            <textarea id="sourceEditor" class="source-editor" style="display:none">{content}</textarea>
+            <textarea id="markdownBuffer" style="display:none"></textarea>
         </div>
         <div class="preview-pane" id="preview"></div>
     </div>
@@ -657,15 +668,339 @@ async def edit_note(name: str):
     </div>
 
     <script>
-    const editor = document.getElementById('editor');
+    const wysiwygEditor = document.getElementById('wysiwygEditor');
+    const sourceEditor = document.getElementById('sourceEditor');
+    const markdownBuffer = document.getElementById('markdownBuffer');
     const preview = document.getElementById('preview');
+    const wordCountEl = document.getElementById('wordCount');
+    const editorStatus = document.getElementById('editorStatus');
 
+    let isSourceMode = false;
+    let dirty = false;
+    const NOTE_NAME = '{name}';
+
+    // ── richToMarkdown: Convert contenteditable HTML to markdown ─────
+    function richToMarkdown(html) {{
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        const lines = [];
+
+        function collectInline(node) {{
+            if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+            if (node.nodeType !== Node.ELEMENT_NODE) return '';
+            const tag = node.tagName.toLowerCase();
+            const inner = Array.from(node.childNodes).map(collectInline).join('');
+            switch (tag) {{
+                case 'strong': case 'b': return `**${{inner}}**`;
+                case 'em': case 'i': return `*${{inner}}*`;
+                case 's': case 'strike': case 'del': return `~~${{inner}}~~`;
+                case 'code': return `\\`${{inner}}\\``;
+                case 'a': return `[${{inner}}](${{node.getAttribute('href') || ''}})`;
+                case 'img': return `![${{node.getAttribute('alt') || ''}}](${{node.getAttribute('src') || ''}})`;
+                case 'br': return '\\n';
+                default: return inner;
+            }}
+        }}
+
+        function processBlock(node) {{
+            if (node.nodeType === Node.TEXT_NODE) {{
+                const text = node.textContent;
+                if (text.trim()) lines.push(text);
+                return;
+            }}
+            if (node.nodeType !== Node.ELEMENT_NODE) return;
+            const tag = node.tagName.toLowerCase();
+            const children = Array.from(node.childNodes);
+
+            if (tag === 'p') {{
+                const text = children.map(collectInline).join('').trim();
+                if (text) lines.push(text);
+                lines.push('');
+            }} else if (tag === 'div') {{
+                children.forEach(processBlock);
+            }} else if (tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4' || tag === 'h5' || tag === 'h6') {{
+                const level = parseInt(tag[1]);
+                const prefix = '#'.repeat(level);
+                const text = children.map(collectInline).join('').trim();
+                lines.push(`${{prefix}} ${{text}}`);
+                lines.push('');
+            }} else if (tag === 'ul' || tag === 'ol') {{
+                const isOrdered = tag === 'ol';
+                children.forEach((li, idx) => {{
+                    if (li.nodeType === Node.ELEMENT_NODE && li.tagName.toLowerCase() === 'li') {{
+                        const text = Array.from(li.childNodes).map(collectInline).join('').trim();
+                        lines.push(isOrdered ? `${{idx + 1}}. ${{text}}` : `- ${{text}}`);
+                    }}
+                }});
+                lines.push('');
+            }} else if (tag === 'blockquote') {{
+                const text = children.map(collectInline).join('').trim();
+                lines.push(`> ${{text}}`);
+                lines.push('');
+            }} else if (tag === 'pre') {{
+                const code = node.querySelector('code');
+                const codeText = code ? code.textContent : node.textContent;
+                lines.push('```');
+                lines.push(codeText);
+                lines.push('```');
+                lines.push('');
+            }} else if (tag === 'hr') {{
+                lines.push('---');
+                lines.push('');
+            }} else if (tag === 'br') {{
+                lines.push('');
+            }} else {{
+                const text = children.map(collectInline).join('').trim();
+                if (text) lines.push(text);
+            }}
+        }}
+
+        Array.from(div.childNodes).forEach(processBlock);
+        return lines.join('\\n').replace(/\\n{{3,}}/g, '\\n\\n').trim();
+    }}
+
+    // ── Enhanced markdownToHtml for preview ──────────────────────
+    function markdownToHtml(text) {{
+        let lines = text.split('\\n');
+        let html = [];
+        let inCode = false;
+        let inList = false;
+        let inOrderedList = false;
+
+        for (let line of lines) {{
+            let s = line.trim();
+
+            if (s.startsWith('```')) {{
+                if (inCode) {{ html.push('</code></pre>'); inCode = false; }}
+                else {{
+                    let lang = s.slice(3).trim();
+                    html.push(lang ? '<pre><code class="language-'+lang+'">' : '<pre><code>');
+                    inCode = true;
+                }}
+                continue;
+            }}
+            if (inCode) {{
+                html.push(line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'));
+                continue;
+            }}
+
+            // Horizontal rule
+            if (/^\\s*[-*_]{{3,}}\\s*$/.test(s)) {{
+                if (inList) {{ html.push('</ul>'); inList = false; }}
+                html.push('<hr>');
+                continue;
+            }}
+
+            // Blockquote
+            if (s.startsWith('> ')) {{
+                if (inList) {{ html.push('</ul>'); inList = false; }}
+                html.push('<blockquote>'+inline(s.slice(2))+'</blockquote>');
+                continue;
+            }}
+
+            // Close lists when needed
+            if (inList && !s.startsWith('- ') && !s.startsWith('* ') && !/^\\d+\\.\\s/.test(s)) {{
+                html.push('</ul>');
+                inList = false;
+            }}
+
+            // Headings
+            if (s.startsWith('### ')) {{ html.push('<h3>'+inline(s.slice(4))+'</h3>'); }}
+            else if (s.startsWith('## ')) {{ html.push('<h2>'+inline(s.slice(3))+'</h2>'); }}
+            else if (s.startsWith('# ')) {{ html.push('<h1>'+inline(s.slice(2))+'</h1>'); }}
+            else if (s.startsWith('- ') || s.startsWith('* ')) {{
+                if (!inList || inOrderedList) {{ html.push('<ul>'); inList = true; inOrderedList = false; }}
+                html.push('<li>'+inline(s.slice(2))+'</li>');
+            }}
+            else if (/^\\d+\\.\\s/.test(s)) {{
+                if (!inList || !inOrderedList) {{ html.push('<ol>'); inList = true; inOrderedList = true; }}
+                html.push('<li>'+inline(s.replace(/^\\d+\\.\\s/, ''))+'</li>');
+            }}
+            else if (s === '') {{ html.push('<br>'); }}
+            else {{ html.push('<p>'+inline(line)+'</p>'); }}
+        }}
+        if (inList) html.push(inOrderedList ? '</ol>' : '</ul>');
+        if (inCode) html.push('</code></pre>');
+        return html.join('\\n');
+    }}
+
+    function inline(text) {{
+        text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+        text = text.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
+        text = text.replace(/\\*(.+?)\\*/g, '<em>$1</em>');
+        text = text.replace(/~~(.+?)~~/g, '<s>$1</s>');
+        text = text.replace(/!\\[([^\\]]*)\\]\\(([^)]+)\\)/g, '<img src="$2" alt="$1">');
+        text = text.replace(/\\[\\[([^\\]]+)\\]\\]/g, '<a href="/note/$1" class="wikilink">$1</a>');
+        text = text.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
+        text = text.replace(/(?<!\\w)#([a-zA-Zа-яА-ЯёЁ][a-zA-Zа-яА-ЯёЁ0-9_\\-/]*)/g, '<a href="/?tag=$1" class="tag">#$1</a>');
+        return text;
+    }}
+
+    // ── Get current markdown content (from whichever mode is active) ──
+    function getMarkdown() {{
+        if (isSourceMode) return sourceEditor.value;
+        return richToMarkdown(wysiwygEditor.innerHTML) || markdownBuffer.value;
+    }}
+
+    // ── Update preview and word count ─────────────────────────────
+    function updatePreview() {{
+        const md = getMarkdown();
+        markdownBuffer.value = md;
+        preview.innerHTML = markdownToHtml(md);
+        preview.querySelectorAll('pre code').forEach(function(b) {{ hljs.highlightElement(b); }});
+        // Word count
+        const words = md.trim() ? md.trim().split(/\\s+/).length : 0;
+        const chars = md.length;
+        wordCountEl.textContent = words + ' words | ' + chars + ' chars';
+    }}
+
+    let debounceTimer;
+    function schedulePreview() {{
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(updatePreview, 200);
+    }}
+
+    // ── Init editor ──────────────────────────────────────────────
+    function initEditor() {{
+        const md = sourceEditor.value;
+        markdownBuffer.value = md;
+        wysiwygEditor.innerHTML = markdownToHtml(md);
+        updatePreview();
+    }}
+
+    // ── WYSIWYG Editor input ──────────────────────────────────
+    wysiwygEditor.addEventListener('input', function() {{
+        schedulePreview();
+        markDirty();
+    }});
+
+    // ── Source Editor input ──────────────────────────────────
+    sourceEditor.addEventListener('input', function() {{
+        schedulePreview();
+        markDirty();
+    }});
+
+    // ── Toolbar ──────────────────────────────────────────────────
+    document.getElementById('toolbar').addEventListener('click', function(e) {{
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        e.preventDefault();
+        const cmd = btn.dataset.cmd;
+        if (!cmd) return;
+
+        if (cmd === 'sourceToggle') {{
+            toggleSourceMode();
+            return;
+        }}
+        if (cmd === 'undo') {{
+            if (isSourceMode) {{ document.execCommand('undo'); return; }}
+            document.execCommand('undo');
+            schedulePreview();
+            return;
+        }}
+        if (cmd === 'redo') {{
+            if (isSourceMode) {{ document.execCommand('redo'); return; }}
+            document.execCommand('redo');
+            schedulePreview();
+            return;
+        }}
+
+        if (isSourceMode) {{
+            insertMarkdownSource(cmd);
+            return;
+        }}
+
+        wysiwygEditor.focus();
+        switch (cmd) {{
+            case 'bold':
+                document.execCommand('bold');
+                break;
+            case 'italic':
+                document.execCommand('italic');
+                break;
+            case 'strikethrough':
+                document.execCommand('strikeThrough');
+                break;
+            case 'h1':
+                document.execCommand('formatBlock', false, '<h1>');
+                break;
+            case 'h2':
+                document.execCommand('formatBlock', false, '<h2>');
+                break;
+            case 'h3':
+                document.execCommand('formatBlock', false, '<h3>');
+                break;
+            case 'link': {{
+                const sel = window.getSelection().toString().trim();
+                const url = prompt('Enter URL:', 'https://');
+                if (url) {{
+                    if (sel) {{
+                        document.execCommand('createLink', false, url);
+                    }} else {{
+                        document.execCommand('insertHTML', false, '<a href="' + url.replace(/"/g, '&quot;') + '">' + url.replace(/^https?:\\/\\//, '').replace(/\\/$/, '') + '</a>');
+                    }}
+                }}
+                break;
+            }}
+            case 'image': {{
+                const url = prompt('Enter image URL:', 'https://');
+                if (url) {{
+                    document.execCommand('insertHTML', false, '<img src="' + url.replace(/"/g, '&quot;') + '" alt="image">');
+                }}
+                break;
+            }}
+            case 'code':
+                if (window.getSelection().toString().trim()) {{
+                    document.execCommand('insertHTML', false, '<code>' + window.getSelection().toString() + '</code>');
+                }} else {{
+                    document.execCommand('insertHTML', false, '<code>code</code>');
+                    const sel = window.getSelection();
+                    if (sel.rangeCount > 0) {{
+                        const range = sel.getRangeAt(0);
+                        range.setStart(range.startContainer, range.startOffset - 4);
+                        range.setEnd(range.startContainer, range.startOffset);
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    }}
+                }}
+                break;
+            case 'list':
+                document.execCommand('insertUnorderedList');
+                break;
+            case 'quote':
+                document.execCommand('formatBlock', false, '<blockquote>');
+                break;
+        }}
+        wysiwygEditor.focus();
+        schedulePreview();
+    }});
+
+    // ── Source mode markdown insertion ─────────────────────────
     function getLineStart(text, pos) {{
         return text.lastIndexOf('\\n', pos - 1) + 1;
     }}
 
-    function insertMarkdown(cmd) {{
-        const ta = editor;
+    function insert(ta, str, cursorOffset) {{
+        const start = ta.selectionStart;
+        const end = ta.selectionEnd;
+        const before = ta.value.substring(0, start);
+        const after = ta.value.substring(end);
+        ta.value = before + str + after;
+        const pos = start + (end > start ? str.length - (end - start) : cursorOffset);
+        ta.setSelectionRange(pos, pos);
+        ta.dispatchEvent(new Event('input'));
+    }}
+
+    function insertAtLine(ta, lineStart, oldLine, newLine, cursorPos) {{
+        const before = ta.value.substring(0, lineStart);
+        const after = ta.value.substring(lineStart + oldLine.length);
+        ta.value = before + newLine + after;
+        ta.setSelectionRange(cursorPos, cursorPos);
+        ta.dispatchEvent(new Event('input'));
+    }}
+
+    function insertMarkdownSource(cmd) {{
+        const ta = sourceEditor;
         const start = ta.selectionStart;
         const end = ta.selectionEnd;
         const text = ta.value;
@@ -674,7 +1009,6 @@ async def edit_note(name: str):
         const lineEnd = text.indexOf('\\n', start);
         const line = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
         const lineSelStart = start - lineStart;
-        const lineSelEnd = end - lineStart;
 
         switch (cmd) {{
             case 'bold': {{
@@ -711,7 +1045,7 @@ async def edit_note(name: str):
             }}
             case 'code': {{
                 const wrap = sel || 'code';
-                insert(ta, `\\`${{wrap}}\\``, 1);
+                insert(ta, '`' + wrap + '`', 1);
                 break;
             }}
             case 'list': {{
@@ -739,41 +1073,68 @@ async def edit_note(name: str):
         schedulePreview();
     }}
 
-    function insert(ta, str, cursorOffset) {{
-        const start = ta.selectionStart;
-        const end = ta.selectionEnd;
-        const before = ta.value.substring(0, start);
-        const after = ta.value.substring(end);
-        ta.value = before + str + after;
-        const pos = start + (end > start ? str.length - (end - start) : cursorOffset);
-        ta.setSelectionRange(pos, pos);
-        ta.dispatchEvent(new Event('input'));
+    // ── Source mode toggle ──────────────────────────────────────
+    function toggleSourceMode() {{
+        isSourceMode = !isSourceMode;
+        const btn = document.getElementById('sourceToggleBtn');
+        if (isSourceMode) {{
+            // Switch to source: sync textarea from wysiwyg
+            sourceEditor.value = getMarkdown();
+            wysiwygEditor.style.display = 'none';
+            sourceEditor.style.display = 'block';
+            sourceEditor.style.height = wysiwygEditor.offsetHeight + 'px';
+            sourceEditor.focus();
+            btn.classList.add('active');
+            editorStatus.textContent = 'source mode';
+        }} else {{
+            // Switch to wysiwyg: render markdown as HTML
+            wysiwygEditor.innerHTML = markdownToHtml(sourceEditor.value);
+            wysiwygEditor.style.display = 'block';
+            sourceEditor.style.display = 'none';
+            wysiwygEditor.focus();
+            btn.classList.remove('active');
+            editorStatus.textContent = '';
+        }}
+        schedulePreview();
     }}
 
-    function insertAtLine(ta, lineStart, oldLine, newLine, cursorPos) {{
-        const before = ta.value.substring(0, lineStart);
-        const after = ta.value.substring(lineStart + oldLine.length);
-        ta.value = before + newLine + after;
-        ta.setSelectionRange(cursorPos, cursorPos);
-        ta.dispatchEvent(new Event('input'));
-    }}
-
-    document.getElementById('toolbar').addEventListener('click', function(e) {{
-        const btn = e.target.closest('button');
-        if (!btn) return;
-        e.preventDefault();
-        insertMarkdown(btn.dataset.cmd);
+    // ── Keyboard shortcuts ────────────────────────────────────
+    wysiwygEditor.addEventListener('keydown', function(e) {{
+        if (e.key === 'Tab') {{
+            e.preventDefault();
+            document.execCommand('insertHTML', false, '    ');
+            return;
+        }}
+        const mod = e.ctrlKey || e.metaKey;
+        if (!mod) return;
+        if (e.key === 'e') {{
+            e.preventDefault();
+            toggleViewMode();
+            return;
+        }}
+        if (e.key === 'z' && !e.shiftKey) {{
+            document.execCommand('undo');
+            e.preventDefault();
+            schedulePreview();
+            return;
+        }}
+        if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {{
+            document.execCommand('redo');
+            e.preventDefault();
+            schedulePreview();
+            return;
+        }}
+        // Let browser handle bold (Ctrl+B) and italic (Ctrl+I)
     }});
 
-    // Keyboard shortcuts
-    editor.addEventListener('keydown', function(e) {{
+    sourceEditor.addEventListener('keydown', function(e) {{
         const mod = e.ctrlKey || e.metaKey;
         if (!mod) return;
         const map = {{b:'bold', i:'italic'}};
         const cmd = map[e.key];
         if (cmd) {{
             e.preventDefault();
-            insertMarkdown(cmd);
+            insertMarkdownSource(cmd);
             return;
         }}
         if (e.key === 'e') {{
@@ -782,38 +1143,41 @@ async def edit_note(name: str):
         }}
     }});
 
-    // ── Image upload ─────────────────────────────────────
+    // ── Image upload ─────────────────────────────────────────
     async function uploadImage(file) {{
         const formData = new FormData();
         formData.append('file', file);
         const resp = await fetch('/api/upload', {{ method: 'POST', body: formData }});
         const data = await resp.json();
         if (data.url) {{
-            const ta = editor;
-            const pos = ta.selectionStart;
-            const before = ta.value.substring(0, pos);
-            const after = ta.value.substring(ta.selectionEnd);
-            const imgMd = `![](${{data.url}})\n`;
-            ta.value = before + imgMd + after;
-            const newPos = pos + imgMd.length;
-            ta.setSelectionRange(newPos, newPos);
-            ta.dispatchEvent(new Event('input'));
+            if (isSourceMode) {{
+                const ta = sourceEditor;
+                const pos = ta.selectionStart;
+                const before = ta.value.substring(0, pos);
+                const after = ta.value.substring(ta.selectionEnd);
+                const imgMd = `![](${{data.url}})\\n`;
+                ta.value = before + imgMd + after;
+                ta.setSelectionRange(pos + imgMd.length, pos + imgMd.length);
+                ta.dispatchEvent(new Event('input'));
+            }} else {{
+                document.execCommand('insertHTML', false, '<img src="' + data.url + '" alt="image">');
+            }}
             schedulePreview();
         }}
     }}
 
     // Drag and drop
-    editor.addEventListener('dragover', function(e) {{
+    wysiwygEditor.addEventListener('dragover', function(e) {{
         e.preventDefault();
-        editor.style.outline = '2px dashed #7c83fd';
+        wysiwygEditor.style.outline = '2px dashed var(--accent)';
     }});
-    editor.addEventListener('dragleave', function(e) {{
+    wysiwygEditor.addEventListener('dragleave', function(e) {{
         e.preventDefault();
-        editor.style.outline = '';
+        wysiwygEditor.style.outline = '';
     }});
-    editor.addEventListener('drop', async function(e) {{
+    wysiwygEditor.addEventListener('drop', async function(e) {{
         e.preventDefault();
-        editor.style.outline = '';
+        wysiwygEditor.style.outline = '';
         const files = e.dataTransfer.files;
         for (const file of files) {{
             if (file.type.startsWith('image/')) {{
@@ -822,97 +1186,29 @@ async def edit_note(name: str):
         }}
     }});
 
-    // Paste from clipboard
-    editor.addEventListener('paste', async function(e) {{
+    // Paste handling for wysiwyg
+    wysiwygEditor.addEventListener('paste', async function(e) {{
         const items = e.clipboardData.items;
+        let hasImage = false;
         for (const item of items) {{
             if (item.type.startsWith('image/')) {{
+                hasImage = true;
                 e.preventDefault();
                 const file = item.getAsFile();
                 if (file) await uploadImage(file);
+                return;
             }}
+        }}
+        if (!hasImage && !isSourceMode) {{
+            e.preventDefault();
+            const text = e.clipboardData.getData('text/plain');
+            document.execCommand('insertText', false, text);
         }}
     }});
 
-    function updatePreview() {{
-        preview.innerHTML = markdownToHtml(editor.value);
-        preview.querySelectorAll('pre code').forEach(function(b) {{ hljs.highlightElement(b); }});
-    }}
-
-    let debounceTimer;
-    function schedulePreview() {{
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(updatePreview, 300);
-    }}
-
-    editor.addEventListener('input', function() {{
-        schedulePreview();
-        markDirty();
-    }});
-    updatePreview();
-
-    function markdownToHtml(text) {{
-        let lines = text.split('\\n');
-        let html = [];
-        let inCode = false;
-        let inList = false;
-
-        for (let line of lines) {{
-            let s = line.trim();
-
-            if (s.startsWith('```')) {{
-                if (inCode) {{ html.push('</code></pre>'); inCode = false; }}
-                else {{
-                    let lang = s.slice(3).trim();
-                    html.push(lang ? '<pre><code class="language-'+lang+'">' : '<pre><code>');
-                    inCode = true;
-                }}
-                continue;
-            }}
-            if (inCode) {{
-                html.push(line.replace(/&/g,'&amp;').replace(/</g,'&lt;'));
-                continue;
-            }}
-
-            // Blockquote
-            if (s.startsWith('> ')) {{
-                html.push('<blockquote>'+inline(s.slice(2))+'</blockquote>');
-                continue;
-            }}
-
-            if (!s.startsWith('- ') && !s.startsWith('* ') && inList) {{
-                html.push('</ul>');
-                inList = false;
-            }}
-
-            if (s.startsWith('### ')) {{ html.push('<h3>'+inline(s.slice(4))+'</h3>'); }}
-            else if (s.startsWith('## ')) {{ html.push('<h2>'+inline(s.slice(3))+'</h2>'); }}
-            else if (s.startsWith('# ')) {{ html.push('<h1>'+inline(s.slice(2))+'</h1>'); }}
-            else if (s.startsWith('- ') || s.startsWith('* ')) {{
-                if (!inList) {{ html.push('<ul>'); inList = true; }}
-                html.push('<li>'+inline(s.slice(2))+'</li>');
-            }}
-            else if (s === '') {{ html.push('<br>'); }}
-            else {{ html.push('<p>'+inline(line)+'</p>'); }}
-        }}
-        if (inList) html.push('</ul>');
-        if (inCode) html.push('</code></pre>');
-        return html.join('\\n');
-    }}
-
-    function inline(text) {{
-        text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-        text = text.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
-        text = text.replace(/\\*(.+?)\\*/g, '<em>$1</em>');
-        text = text.replace(/!\\[([^\\]]*)\\]\\(([^)]+)\\)/g, '<img src="$2" alt="$1">');
-        text = text.replace(/\\[\\[([^\\]]+)\\]\\]/g, '<a href="/note/$1" class="wikilink">$1</a>');
-        text = text.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
-        text = text.replace(/(?<!\\w)#([a-zA-Zа-яА-ЯёЁ][a-zA-Zа-яА-ЯёЁ0-9_\\-/]*)/g, '<a href="/?tag=$1" class="tag">#$1</a>');
-        return text;
-    }}
-
+    // ── Save ────────────────────────────────────────────────────
     function saveNote() {{
-        const content = editor.value;
+        let content = getMarkdown();
         const name = '{name}' === 'new' ? prompt('Note name:') : '{name}';
         if (!name) return;
         const btn = document.querySelector('.editor-actions .btn-primary');
@@ -942,17 +1238,14 @@ async def edit_note(name: str):
         }});
     }}
 
-    // ── Auto-save ───────────────────────────────────────
-    let dirty = false;
-    const NOTE_NAME = '{name}';
-
+    // ── Auto-save ─────────────────────────────────────────────
     function markDirty() {{
         dirty = true;
     }}
 
     function autoSave() {{
         if (NOTE_NAME === 'new') return;
-        const content = editor.value;
+        const content = getMarkdown();
         fetch('/api/note', {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
@@ -971,9 +1264,8 @@ async def edit_note(name: str):
             if (dirty) autoSave();
         }}, 3000);
     }}
-    startAutoSave();
 
-    // ── View mode toggle ────────────────────────────────
+    // ── View mode toggle ──────────────────────────────────────
     let viewMode = 0;
     const editorPane = document.querySelector('.editor-pane');
     const previewPane = document.querySelector('.preview-pane');
@@ -995,7 +1287,7 @@ async def edit_note(name: str):
         );
     }}
 
-    // ── Attachments panel ──────────────────────────────
+    // ── Attachments panel ────────────────────────────────────
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const attachmentsGrid = document.getElementById('attachmentsGrid');
@@ -1057,12 +1349,10 @@ async def edit_note(name: str):
             }});
     }}
 
-    // Drop zone click to open file picker
     dropZone.addEventListener('click', function() {{
         fileInput.click();
     }});
 
-    // Drag over drop zone
     dropZone.addEventListener('dragover', function(e) {{
         e.preventDefault();
         e.stopPropagation();
@@ -1083,7 +1373,6 @@ async def edit_note(name: str):
         uploadFiles(files);
     }});
 
-    // File input change
     fileInput.addEventListener('change', function() {{
         uploadFiles(fileInput.files);
         fileInput.value = '';
@@ -1108,11 +1397,14 @@ async def edit_note(name: str):
         if (count === 0) loadAttachments();
     }}
 
+    // ── Init ────────────────────────────────────────────────────
+    initEditor();
+    startAutoSave();
     loadAttachments();
-    </script>
-    <script>
+
     if ('{name}' === 'new') {{
-        editor.focus();
+        if (isSourceMode) sourceEditor.focus();
+        else wysiwygEditor.focus();
     }}
     </script>
     """

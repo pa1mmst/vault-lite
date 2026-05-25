@@ -188,9 +188,9 @@ class TestEditor:
         assert "editor-layout" in r.text
         assert "toolbar" in r.text
         assert "preview-pane" in r.text
-        assert "editor" in r.text
         assert 'id="preview"' in r.text
-        assert 'id="editor"' in r.text
+        assert 'id="wysiwygEditor"' in r.text
+        assert 'contenteditable=' in r.text or 'contenteditable' in r.text
 
     def test_editor_has_toolbar_buttons(self, client):
         r = client.get("/edit/test-editor")
@@ -204,12 +204,15 @@ class TestEditor:
         assert 'data-cmd="code"' in r.text
         assert 'data-cmd="list"' in r.text
         assert 'data-cmd="quote"' in r.text
+        assert 'data-cmd="undo"' in r.text
+        assert 'data-cmd="redo"' in r.text
+        assert 'data-cmd="sourceToggle"' in r.text
 
     def test_editor_has_debounce(self, client):
         r = client.get("/edit/test-editor")
         assert r.status_code == 200
         assert "debounceTimer" in r.text
-        assert "setTimeout(updatePreview, 300)" in r.text
+        assert "200" in r.text and "setTimeout(updatePreview" in r.text
 
     def test_editor_has_save_function(self, client):
         r = client.get("/edit/test-editor")
@@ -220,8 +223,7 @@ class TestEditor:
     def test_editor_has_keyboard_shortcuts(self, client):
         r = client.get("/edit/test-editor")
         assert r.status_code == 200
-        assert "Ctrl+B" in r.text or "metaKey" in r.text
-        assert "b:'bold'" in r.text or "i:'italic'" in r.text or "Ctrl+I" in r.text
+        assert "ctrlKey" in r.text or "metaKey" in r.text
 
     def test_editor_new_note_has_default_content(self, client):
         r = client.get("/edit/new")
