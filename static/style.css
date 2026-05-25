@@ -809,6 +809,20 @@
   overflow-y: auto;
 }
 
+.editor-pane.mode-hidden {
+  display: none;
+}
+.editor-pane.mode-full {
+  border-right: none;
+  grid-column: 1 / -1;
+}
+.preview-pane.mode-hidden {
+  display: none;
+}
+.preview-pane.mode-full {
+  grid-column: 1 / -1;
+}
+
 .preview-pane h1,
 .preview-pane h2,
 .preview-pane h3 {

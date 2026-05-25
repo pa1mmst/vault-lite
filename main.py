@@ -259,6 +259,8 @@ def render_page(title, body, active="notes"):
                 <div class="hotkey-row"><span class="hotkey-keys"><kbd>Ctrl</kbd> + <kbd>B</kbd></span><span class="hotkey-desc">Bold</span></div>
                 <div class="hotkey-row"><span class="hotkey-keys"><kbd>Ctrl</kbd> + <kbd>I</kbd></span><span class="hotkey-desc">Italic</span></div>
                 <div class="hotkey-row"><span class="hotkey-keys"><kbd>Ctrl</kbd> + <kbd>S</kbd></span><span class="hotkey-desc">Save note</span></div>
+                <div class="hotkey-row"><span class="hotkey-keys"><kbd>Ctrl</kbd> + <kbd>N</kbd></span><span class="hotkey-desc">New note</span></div>
+                <div class="hotkey-row"><span class="hotkey-keys"><kbd>Ctrl</kbd> + <kbd>E</kbd></span><span class="hotkey-desc">Toggle edit/preview</span></div>
                 <div class="hotkey-row"><span class="hotkey-keys"><kbd>Ctrl</kbd> + <kbd>K</kbd></span><span class="hotkey-desc">Search notes</span></div>
                 <div class="hotkey-row"><span class="hotkey-keys"><kbd>Esc</kbd></span><span class="hotkey-desc">Close modal / Cancel</span></div>
             </div>
@@ -306,6 +308,10 @@ def render_page(title, body, active="notes"):
             e.preventDefault();
             var input = document.getElementById('searchInput');
             if (input) input.focus();
+        }}
+        if ((e.ctrlKey || e.metaKey) && e.key === 'n') {{
+            e.preventDefault();
+            window.location = '/edit/new';
         }}
         if ((e.ctrlKey || e.metaKey) && e.key === 's') {{
             var saveBtn = document.querySelector('.editor-actions .btn-primary');
@@ -676,6 +682,11 @@ async def edit_note(name: str):
         if (cmd) {{
             e.preventDefault();
             insertMarkdown(cmd);
+            return;
+        }}
+        if (e.key === 'e') {{
+            e.preventDefault();
+            toggleViewMode();
         }}
     }});
 
@@ -741,7 +752,10 @@ async def edit_note(name: str):
         debounceTimer = setTimeout(updatePreview, 300);
     }}
 
-    editor.addEventListener('input', schedulePreview);
+    editor.addEventListener('input', function() {{
+        schedulePreview();
+        markDirty();
+    }});
     updatePreview();
 
     function markdownToHtml(text) {{
@@ -814,6 +828,7 @@ async def edit_note(name: str):
             headers: {{'Content-Type': 'application/json'}},
             body: JSON.stringify({{name, content}})
         }}).then(r => r.json()).then(d => {{
+            dirty = false;
             btn.textContent = 'Saved!';
             btn.disabled = false;
             btn.classList.remove('btn-saving');
@@ -828,6 +843,59 @@ async def edit_note(name: str):
             btn.classList.remove('btn-saving');
             showToast('Save failed', 'error');
         }});
+    }}
+
+    // ── Auto-save ───────────────────────────────────────
+    let dirty = false;
+    const NOTE_NAME = '{name}';
+
+    function markDirty() {{
+        dirty = true;
+    }}
+
+    function autoSave() {{
+        if (NOTE_NAME === 'new') return;
+        const content = editor.value;
+        fetch('/api/note', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{name: NOTE_NAME, content}})
+        }}).then(function(r) {{ return r.json(); }}).then(function() {{
+            dirty = false;
+        }}).catch(function() {{
+            showToast('Auto-save failed', 'error');
+        }});
+    }}
+
+    let autoSaveTimer;
+    function startAutoSave() {{
+        if (autoSaveTimer) return;
+        autoSaveTimer = setInterval(function() {{
+            if (dirty) autoSave();
+        }}, 3000);
+    }}
+    startAutoSave();
+
+    // ── View mode toggle ────────────────────────────────
+    let viewMode = 0;
+    const editorPane = document.querySelector('.editor-pane');
+    const previewPane = document.querySelector('.preview-pane');
+
+    function toggleViewMode() {{
+        viewMode = (viewMode + 1) % 3;
+        editorPane.classList.remove('mode-hidden', 'mode-full');
+        previewPane.classList.remove('mode-hidden', 'mode-full');
+        if (viewMode === 1) {{
+            previewPane.classList.add('mode-hidden');
+            editorPane.classList.add('mode-full');
+        }} else if (viewMode === 2) {{
+            editorPane.classList.add('mode-hidden');
+            previewPane.classList.add('mode-full');
+        }}
+        showToast(
+            viewMode === 0 ? 'Split view' : viewMode === 1 ? 'Edit mode' : 'Preview mode',
+            'info'
+        );
     }}
 
     // ── Attachments panel ──────────────────────────────
