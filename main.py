@@ -701,7 +701,7 @@ async def edit_note(name: str):
                 case 'code': return `\`${{inner}}\``;
                 case 'a': return `[${{inner}}](${{node.getAttribute('href') || ''}})`;
                 case 'img': return `![${{node.getAttribute('alt') || ''}}](${{node.getAttribute('src') || ''}})`;
-                case 'br': return '\n';
+                case 'br': return '\\n';
                 default: return inner;
             }}
         }}
@@ -760,12 +760,12 @@ async def edit_note(name: str):
         }}
 
         Array.from(div.childNodes).forEach(processBlock);
-        return lines.join('\n').replace(/\n{{3,}}/g, '\n\n').trim();
+        return lines.join('\\n').replace(/\\n{{3,}}/g, '\\n\\n').trim();
     }}
 
     // ── Enhanced markdownToHtml for preview ──────────────────────
     function markdownToHtml(text) {{
-        let lines = text.split('\n');
+        let lines = text.split('\\n');
         let html = [];
         let inCode = false;
         let inList = false;
@@ -828,7 +828,7 @@ async def edit_note(name: str):
         }}
         if (inList) html.push(inOrderedList ? '</ol>' : '</ul>');
         if (inCode) html.push('</code></pre>');
-        return html.join('\n');
+        return html.join('\\n');
     }}
 
     function inline(text) {{
@@ -989,7 +989,7 @@ async def edit_note(name: str):
 
     // ── Source mode markdown insertion ─────────────────────────
     function getLineStart(text, pos) {{
-        return text.lastIndexOf('\n', pos - 1) + 1;
+        return text.lastIndexOf('\\n', pos - 1) + 1;
     }}
 
     function insert(ta, str, cursorOffset) {{
@@ -1018,7 +1018,7 @@ async def edit_note(name: str):
         const text = ta.value;
         const sel = text.substring(start, end);
         const lineStart = getLineStart(text, start);
-        const lineEnd = text.indexOf('\n', start);
+        const lineEnd = text.indexOf('\\n', start);
         const line = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
         const lineSelStart = start - lineStart;
 
@@ -1167,7 +1167,7 @@ async def edit_note(name: str):
                 const pos = ta.selectionStart;
                 const before = ta.value.substring(0, pos);
                 const after = ta.value.substring(ta.selectionEnd);
-                const imgMd = `![](${{data.url}})\n`;
+                const imgMd = `![](${{data.url}})\\n`;
                 ta.value = before + imgMd + after;
                 ta.setSelectionRange(pos + imgMd.length, pos + imgMd.length);
                 ta.dispatchEvent(new Event('input'));
