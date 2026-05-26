@@ -3,6 +3,8 @@ import os
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "vault-index.db")
 
+from vault import note_exists, get_all_folders as vault_folders
+
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -134,13 +136,33 @@ def get_notes_by_folder(folder):
         (folder,),
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        if note_exists(r["name"]):
+            result.append({"name": r["name"], "updated_at": r["updated_at"]})
+    return result
+
+
+def clear_all_notes():
+    """Delete all notes, tags, and links from the index."""
+    conn = get_conn()
+    conn.execute("DELETE FROM tags")
+    conn.execute("DELETE FROM links")
+    conn.execute("DELETE FROM notes")
+    conn.commit()
+    conn.close()
 
 
 def get_all_folders_with_counts():
+    """Return folders that actually exist on disk, with note counts from DB."""
+    folders = vault_folders()
+    if not folders:
+        return []
     conn = get_conn()
+    placeholders = ",".join("?" for _ in folders)
     rows = conn.execute(
-        "SELECT folder, COUNT(*) as count FROM notes WHERE folder != '' GROUP BY folder ORDER BY folder"
+        f"SELECT folder, COUNT(*) as count FROM notes WHERE folder IN ({placeholders}) GROUP BY folder ORDER BY folder",
+        folders,
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
