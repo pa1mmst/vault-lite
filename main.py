@@ -44,14 +44,17 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 # ── Markdown → HTML (minimal, no deps) ───────────────────────
 def md_to_html(text):
     """Minimal Markdown → HTML converter."""
+    import re
     lines = text.split("\n")
     html_lines = []
     in_code = False
     in_list = False
+    in_olist = False
 
     for line in lines:
-        # Code block
         stripped = line.strip()
+
+        # Code block
         if stripped.startswith("```"):
             if in_code:
                 html_lines.append("</code></pre>")
@@ -65,38 +68,76 @@ def md_to_html(text):
             html_lines.append(line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
             continue
 
-        # Close list if needed
-        if not stripped.startswith("- ") and not stripped.startswith("* ") and in_list:
-            html_lines.append("</ul>")
+        # Horizontal rule
+        if re.match(r'^\s*[-*_]{3,}\s*$', stripped):
+            if in_list:
+                html_lines.append("</ul>" if not in_olist else "</ol>")
+                in_list = False
+                in_olist = False
+            html_lines.append("<hr>")
+            continue
+
+        # Blockquote
+        if stripped.startswith("> "):
+            if in_list:
+                html_lines.append("</ul>" if not in_olist else "</ol>")
+                in_list = False
+                in_olist = False
+            html_lines.append(f"<blockquote>{inline(stripped[2:])}</blockquote>")
+            continue
+
+        # Close list when line doesn't match any list pattern
+        is_ul = stripped.startswith("- ") or stripped.startswith("* ")
+        is_ol = bool(re.match(r'^\d+\.\s', stripped))
+        if in_list and not is_ul and not is_ol:
+            html_lines.append("</ul>" if not in_olist else "</ol>")
             in_list = False
+            in_olist = False
 
         # Headings
-        if stripped.startswith("### "):
+        if stripped.startswith("###### "):
+            html_lines.append(f"<h6>{inline(stripped[7:])}</h6>")
+        elif stripped.startswith("##### "):
+            html_lines.append(f"<h5>{inline(stripped[6:])}</h5>")
+        elif stripped.startswith("#### "):
+            html_lines.append(f"<h4>{inline(stripped[5:])}</h4>")
+        elif stripped.startswith("### "):
             html_lines.append(f"<h3>{inline(stripped[4:])}</h3>")
         elif stripped.startswith("## "):
             html_lines.append(f"<h2>{inline(stripped[3:])}</h2>")
         elif stripped.startswith("# "):
             html_lines.append(f"<h1>{inline(stripped[2:])}</h1>")
-        # List item
-        elif stripped.startswith("- ") or stripped.startswith("* "):
-            if not in_list:
+        # Unordered list item
+        elif is_ul:
+            if not in_list or in_olist:
                 html_lines.append("<ul>")
                 in_list = True
-            html_lines.append(f"<li>{inline(line.strip()[2:])}</li>")
+                in_olist = False
+            html_lines.append(f"<li>{inline(stripped[2:])}</li>")
+        # Ordered list item
+        elif is_ol:
+            if not in_list or not in_olist:
+                html_lines.append("<ol>")
+                in_list = True
+                in_olist = True
+            content = re.sub(r'^\d+\.\s', '', stripped)
+            html_lines.append(f"<li>{inline(content)}</li>")
         # Empty line
         elif stripped == "":
             if in_list:
-                html_lines.append("</ul>")
+                html_lines.append("</ul>" if not in_olist else "</ol>")
                 in_list = False
+                in_olist = False
             html_lines.append("<br>")
         else:
             if in_list:
-                html_lines.append("</ul>")
+                html_lines.append("</ul>" if not in_olist else "</ol>")
                 in_list = False
+                in_olist = False
             html_lines.append(f"<p>{inline(line)}</p>")
 
     if in_list:
-        html_lines.append("</ul>")
+        html_lines.append("</ul>" if not in_olist else "</ol>")
     if in_code:
         html_lines.append("</code></pre>")
 
