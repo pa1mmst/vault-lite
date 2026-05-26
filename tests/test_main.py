@@ -147,6 +147,31 @@ class TestFolders:
         assert r.status_code == 200
         assert "editor-layout" in r.text
 
+    def test_folder_only_shows_existing_notes(self, client):
+        """Stale DB entries (notes deleted from disk but still in index)
+        should not appear in folder filter results."""
+        client.post("/api/note", json={"name": "existing-folder/note-a", "content": "exists"})
+        # Manually delete the file to create a stale DB entry
+        vault = os.environ.get("VAULT_DIR", "/tmp/vault-test-api")
+        fpath = os.path.join(vault, "existing-folder", "note-a.md")
+        if os.path.exists(fpath):
+            os.remove(fpath)
+        r = client.get("/?folder=existing-folder")
+        assert r.status_code == 200
+        assert "note-a" not in r.text, "Stale note should not appear in folder filter"
+
+    def test_folder_tree_excludes_empty_folders(self, client):
+        """Folders whose notes have been removed from disk should not appear
+        in the sidebar folder tree."""
+        client.post("/api/note", json={"name": "ghost-folder/n1", "content": "ghost"})
+        vault = os.environ.get("VAULT_DIR", "/tmp/vault-test-api")
+        fpath = os.path.join(vault, "ghost-folder", "n1.md")
+        if os.path.exists(fpath):
+            os.remove(fpath)
+        r = client.get("/")
+        assert r.status_code == 200
+        assert "ghost-folder" not in r.text, "Empty folder should not appear in sidebar tree"
+
 
 class TestBacklinks:
     def test_backlinks_api_empty(self, client):

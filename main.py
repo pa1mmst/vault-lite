@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from database import (
     init_db, migrate_db, index_note, remove_note, search_notes,
     get_all_tags, get_all_links, get_all_note_names, get_backlinks,
-    get_notes_by_folder, get_all_folders_with_counts,
+    get_notes_by_folder, get_all_folders_with_counts, clear_all_notes,
 )
 from vault import (
     read_note, write_note, delete_note, list_notes, get_folder,
@@ -27,6 +27,7 @@ except ImportError:
 async def lifespan(app: FastAPI):
     init_db()
     migrate_db()
+    clear_all_notes()
     for note in list_notes():
         tags = parse_tags(note["content"])
         links = parse_wikilinks(note["content"])
