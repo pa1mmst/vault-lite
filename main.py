@@ -1459,13 +1459,21 @@ async def edit_note(name: str):
     }}
 
     // ── Init ────────────────────────────────────────────────────
-    initEditor();
-    startAutoSave();
-    loadAttachments();
+    function initOnLoad() {{
+        initEditor();
+        startAutoSave();
+        loadAttachments();
 
-    if ('{name}' === 'new') {{
-        if (isSourceMode) sourceEditor.focus();
-        else wysiwygEditor.focus();
+        if ('{name}' === 'new') {{
+            if (isSourceMode) sourceEditor.focus();
+            else wysiwygEditor.focus();
+        }}
+    }}
+
+    if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', initOnLoad);
+    }} else {{
+        initOnLoad();
     }}
     </script>
     """
