@@ -266,7 +266,7 @@ def _folder_tree_html(folders_with_counts, current_folder=""):
             has_children = bool(data["children"])
             toggle_id = f"ft-{data['path'].replace('/', '-')}"
             if has_children:
-                chevron = f'<span class="folder-chevron" onclick="event.preventDefault();event.stopPropagation();toggleFolderSub(\'{toggle_id}\',this)">&#x25B6;</span>'
+                chevron = '<span class="folder-chevron" onclick="event.preventDefault();event.stopPropagation();toggleFolderSub(String.fromCharCode(39) + \'' + toggle_id + '\' + String.fromCharCode(39), this)">&#x25B6;</span>'
             else:
                 chevron = '<span class="folder-chevron folder-chevron-empty"></span>'
             style = f"padding-left:{12 + depth * 16}px;"
@@ -1434,7 +1434,7 @@ async def edit_note(name: str, folder: str = "", request: Request = None):
                         + '<span class="attachment-name" title="' + f.filename + '">' + f.filename + '</span>'
                         + '<span class="attachment-size">' + formatSize(f.size) + '</span>'
                         + '</div>'
-                        + '<button class="attachment-delete" onclick="deleteAttachment(\'' + f.filename.replace("'", "\\'") + '\', this)" title="Delete attachment">&times;</button>'
+                        + '<button class="attachment-delete" onclick="deleteAttachment(String.fromCharCode(39) + f.filename + String.fromCharCode(39), this)" title="Delete attachment">&times;</button>'
                         + '</div>';
                 }}
                 attachmentsGrid.innerHTML = html;
